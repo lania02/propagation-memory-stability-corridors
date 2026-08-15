@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the accompanying article."
+title: "Reproducibility package for family-uniform propagation-memory stability corridors"
+type: software
+authors:
+  - family-names: Lai
+    given-names: Jiaqi
+  - family-names: Liang
+    given-names: Hou
+  - family-names: Huang
+    given-names: Weihong
+version: 0.1.0
+date-released: 2026-08-15
+license: MIT
+repository-code: "https://github.com/lania02/propagation-memory-stability-corridors"
