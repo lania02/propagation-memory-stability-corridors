@@ -16,6 +16,7 @@ from validation import (
     general_system,
     inf_norm,
     nonnormality,
+    permutation_shift,
     spectral_radius,
     theoretical_bounds,
     topology_family,
@@ -143,6 +144,9 @@ def generate_validation_data() -> dict[str, object]:
                 }
             )
     write_csv(DATA_DIR / "general_ensemble.csv", ensemble_rows)
+    norm_inconclusive_count = sum(row["full_inf_norm"] > 1.0 for row in ensemble_rows)
+    if norm_inconclusive_count != 193:
+        raise AssertionError("ordinary-norm regression count has changed")
 
     corridor_rows: list[dict[str, object]] = []
     topologies = topology_family(n_example, 60, rng)
@@ -184,6 +188,46 @@ def generate_validation_data() -> dict[str, object]:
         )
     write_csv(DATA_DIR / "corridor_scan.csv", corridor_rows)
 
+    witness_n = 16
+    witness_M = 0.65
+    witness_c = 0.982
+    witness_eps = 0.0
+    witness_alpha = 0.1
+    witness_b_max = 0.1
+    witness_q = witness_alpha * witness_b_max
+    witness_bounds = theoretical_bounds(
+        witness_M, witness_c, witness_eps, witness_q
+    )
+    witness_A = np.diag(np.linspace(0.35, witness_M, witness_n))
+    witness_B = np.diag(np.linspace(0.024, witness_b_max, witness_n))
+    witness_C = witness_c * np.eye(witness_n)
+    witness_D = witness_alpha * np.eye(witness_n)
+    witness_rows: list[dict[str, object]] = []
+    for shift in (9, 8):
+        witness_W = permutation_shift(witness_n, shift)
+        witness_J = assemble(witness_A @ witness_W, witness_B, witness_D, witness_C)
+        witness_rho = spectral_radius(witness_J)
+        witness_rows.append(
+            {
+                "n": witness_n,
+                "M": witness_M,
+                "c": witness_c,
+                "eps": witness_eps,
+                "q": witness_q,
+                "alpha": witness_alpha,
+                "b_min": 0.024,
+                "b_max": witness_b_max,
+                "permutation_shift": shift,
+                "rho": witness_rho,
+                "stable": int(witness_rho < 1.0),
+                "family_lower": witness_bounds.lower,
+                "family_upper": witness_bounds.upper,
+            }
+        )
+    if not witness_rows[0]["rho"] < 1.0 < witness_rows[1]["rho"]:
+        raise AssertionError("topology-only witness should straddle the unit circle")
+    write_csv(DATA_DIR / "topology_witness.csv", witness_rows)
+
     scaling_rows: list[dict[str, object]] = []
     rho_reference = spectral_radius(J_example)
     for scale in np.logspace(-1.5, 1.5, 81):
@@ -211,6 +255,12 @@ def generate_validation_data() -> dict[str, object]:
         current = theoretical_bounds(M, c, eps, float(q_value))
         if not current.separated:
             raise AssertionError("coupling benchmark should remain separated")
+        comparison_matrix = np.array(
+            [[M, np.sqrt(q_value)], [np.sqrt(q_value), c + eps]]
+        )
+        scalar_extremizer_rho = spectral_radius(comparison_matrix)
+        if abs(scalar_extremizer_rho - current.upper) > 1e-12:
+            raise AssertionError("comparison-matrix Perron root should equal U")
         rho_values = []
         for _ in range(40):
             n = int(rng.choice([8, 12, 16]))
@@ -222,6 +272,7 @@ def generate_validation_data() -> dict[str, object]:
                 "q": float(q_value),
                 "q_over_gap_squared": float(q_value / (gap * gap)),
                 "rho_max": float(max(rho_values)),
+                "scalar_extremizer_rho": scalar_extremizer_rho,
                 "lower": current.lower,
                 "upper": current.upper,
                 "symmetric_upper": current.symmetric_upper,
@@ -235,7 +286,9 @@ def generate_validation_data() -> dict[str, object]:
         "example_eigs": example_eigs,
         "diagnostics": diagnostics,
         "ensemble_rows": ensemble_rows,
+        "norm_inconclusive_count": norm_inconclusive_count,
         "corridor_rows": corridor_rows,
+        "witness_rows": witness_rows,
         "scaling_rows": scaling_rows,
         "coupling_rows": coupling_rows,
     }
@@ -282,6 +335,22 @@ def create_figure_one(results: dict[str, object]) -> None:
     ax.set_ylabel(r"$\mathrm{Im}\,\lambda$")
     ax.set_title(r"(a) Empty annulus for $n=12$, $p=4$")
     ax.legend(loc="lower left", frameon=False)
+    inset = ax.inset_axes([0.61, 0.63, 0.34, 0.29])
+    inset.scatter(
+        eigenvalues[inner].real,
+        eigenvalues[inner].imag,
+        marker="s",
+        s=24,
+        color=ORANGE,
+    )
+    inset.add_patch(
+        Circle((c, 0), bounds.inner_radius, fill=False, color=ORANGE, linewidth=1.0)
+    )
+    inset.set_xlim(c - 1.12 * bounds.inner_radius, c + 1.12 * bounds.inner_radius)
+    inset.set_ylim(-1.12 * bounds.inner_radius, 1.12 * bounds.inner_radius)
+    inset.set_xticks([])
+    inset.set_yticks([])
+    inset.set_title("4 memory eigenvalues", fontsize=6.5)
 
     ax = axes[1]
     pairs = [(8, 3), (12, 5), (16, 7), (20, 4)]
@@ -362,15 +431,18 @@ def create_figure_two(results: dict[str, object]) -> None:
     ax = axes[1]
     x = np.array([row["q_over_gap_squared"] for row in coupling_rows], dtype=float)
     empirical = np.array([row["rho_max"] for row in coupling_rows], dtype=float)
+    scalar = np.array([row["scalar_extremizer_rho"] for row in coupling_rows], dtype=float)
     upper = np.array([row["upper"] for row in coupling_rows], dtype=float)
     symmetric = np.array([row["symmetric_upper"] for row in coupling_rows], dtype=float)
     ax.plot(x, symmetric, color=PURPLE, linestyle=":", label=r"symmetric edge $c+R_-$")
     ax.plot(x, upper, color=GREEN, label=r"exact family upper edge $U$")
+    ax.plot(x, scalar, color="black", linestyle="none", marker="o", fillstyle="none",
+            markersize=3.6, markevery=4, label="scalar extremizer")
     ax.plot(x, empirical, color=BLUE, marker="o", markersize=2.5,
             markevery=4, label="ensemble maximum")
     ax.set_xlabel(r"normalized coupling $q/g^2$")
     ax.set_ylabel("upper edge or spectral radius")
-    ax.set_title("(b) The asymmetric upper edge is tighter")
+    ax.set_title("(b) Exact family edge and random realizations")
     ax.legend(frameon=False)
 
     fig.tight_layout(w_pad=1.6)
@@ -395,6 +467,13 @@ def main() -> None:
     print(
         f"family band: [{bounds.lower:.6f}, {bounds.upper:.6f}], "
         f"symmetric upper={bounds.symmetric_upper:.6f}"
+    )
+    print(f"ordinary norm inconclusive: {results['norm_inconclusive_count']}/600")
+    witness_rows = results["witness_rows"]
+    print(
+        "topology witness: "
+        f"shift 9 rho={witness_rows[0]['rho']:.6f}, "
+        f"shift 8 rho={witness_rows[1]['rho']:.6f}"
     )
     print("wrote data to ./data")
     print("wrote figures to ./figures")

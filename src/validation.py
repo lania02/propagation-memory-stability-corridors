@@ -104,12 +104,22 @@ def random_row_stochastic(n: int, rng: np.random.Generator) -> np.ndarray:
     return raw / raw.sum(axis=1, keepdims=True)
 
 
+def permutation_shift(n: int, shift: int) -> np.ndarray:
+    """Return the row-stochastic cyclic permutation with a nonzero shift."""
+
+    if n < 2:
+        raise ValueError("n must be at least two")
+    if shift % n == 0:
+        raise ValueError("shift must be nonzero modulo n")
+    return np.roll(np.eye(n), shift % n, axis=1)
+
+
 def topology_family(n: int, count: int, rng: np.random.Generator) -> list[tuple[str, np.ndarray]]:
     """Generate structured and random row-stochastic directed topologies."""
 
     topologies: list[tuple[str, np.ndarray]] = []
     for shift in (1, 2, 3):
-        topologies.append((f"shift_{shift}", np.roll(np.eye(n), shift, axis=1)))
+        topologies.append((f"shift_{shift}", permutation_shift(n, shift)))
 
     sink = np.zeros((n, n))
     sink[:, 0] = 1.0

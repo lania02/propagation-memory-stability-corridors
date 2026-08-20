@@ -13,14 +13,24 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
 from validation import (  # noqa: E402
+    assemble,
     cluster_diagnostics,
     general_system,
+    permutation_shift,
     spectral_radius,
     theoretical_bounds,
 )
 
 
 class StabilityBoundTests(unittest.TestCase):
+    def test_two_state_comparison_matrix_attains_upper_edge(self) -> None:
+        M, c, eps, q = 0.45, 0.84, 0.04, 0.0064
+        bounds = theoretical_bounds(M, c, eps, q)
+        comparison = np.array(
+            [[M, np.sqrt(q)], [np.sqrt(q), c + eps]]
+        )
+        self.assertAlmostEqual(spectral_radius(comparison), bounds.upper, places=14)
+
     def test_q_zero_is_block_triangular_boundary(self) -> None:
         M, c, eps, q = 0.2, 1.0, 0.1, 0.0
         bounds = theoretical_bounds(M, c, eps, q)
@@ -57,6 +67,30 @@ class StabilityBoundTests(unittest.TestCase):
         for _ in range(200):
             J, _, _, _, _ = general_system(8, 3, M, c, eps, q, rng)
             self.assertLessEqual(spectral_radius(J), bounds.upper + 1e-10)
+
+    def test_topology_only_stability_witness(self) -> None:
+        n = 16
+        M, c, eps = 0.65, 0.982, 0.0
+        alpha, b_max = 0.1, 0.1
+        q = alpha * b_max
+        bounds = theoretical_bounds(M, c, eps, q)
+        self.assertTrue(bounds.separated)
+        self.assertLess(bounds.lower, 1.0)
+        self.assertGreater(bounds.upper, 1.0)
+
+        A = np.diag(np.linspace(0.35, M, n))
+        B = np.diag(np.linspace(0.024, b_max, n))
+        C = c * np.eye(n)
+        D = alpha * np.eye(n)
+        radii = {}
+        for shift in (9, 8):
+            W = permutation_shift(n, shift)
+            radii[shift] = spectral_radius(assemble(A @ W, B, D, C))
+
+        self.assertAlmostEqual(radii[9], 0.9951593871107954, places=12)
+        self.assertAlmostEqual(radii[8], 1.0007141342930006, places=12)
+        self.assertLess(radii[9], 1.0)
+        self.assertGreater(radii[8], 1.0)
 
 
 if __name__ == "__main__":

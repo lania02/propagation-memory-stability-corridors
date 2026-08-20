@@ -12,10 +12,14 @@ substitute for the proofs.
   block.
 - A 600-member general block ensemble with unequal dimensions.
 - A 60-topology row-stochastic sweep across the three stability corridors.
+- A fixed-parameter pair of permutation topologies that lie on opposite sides
+  of the unit-circle stability boundary.
 - A coordinate-rescaling benchmark showing why the feedback product
   `q = ||B|| ||D||` is more informative than a raw full-matrix norm.
 - A comparison between the exact family upper edge `U`, the symmetric reference
   edge, and the largest spectral radius observed in a generalized ensemble.
+- A count of cases in which the ordinary full-matrix norm cannot certify
+  recovery although the product bound can.
 
 All random calculations use the fixed seed `26032026` and the induced infinity
 norm.
@@ -76,7 +80,9 @@ c - R_- <= rho(J) <= U <= c + R_-.
 ```
 
 The test suite also covers the degenerate `q=0` case and an unseparated family,
-for which only the unconditional upper bound is invoked.
+for which only the unconditional upper bound is invoked. It also verifies that
+the shift-9 and shift-8 permutation topologies reproduce the topology-only
+stability witness reported in `data/topology_witness.csv`.
 
 ## Archiving
 

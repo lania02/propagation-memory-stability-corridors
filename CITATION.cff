@@ -9,7 +9,7 @@ authors:
     given-names: Hou
   - family-names: Huang
     given-names: Weihong
-version: 0.1.0
-date-released: 2026-08-15
+version: 0.2.0
+date-released: 2026-08-20
 license: MIT
 repository-code: "https://github.com/lania02/propagation-memory-stability-corridors"
