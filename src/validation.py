@@ -80,6 +80,57 @@ def spectral_radius(matrix: np.ndarray) -> float:
     return float(np.max(np.abs(np.linalg.eigvals(matrix))))
 
 
+def weighted_block_envelope(M: float, h: float, b: float, d: float) -> float:
+    """Return inf_{t>0} max(M + b*t, h + d/t), including zero couplings.
+
+    This is the classical optimized block-norm envelope, not an additional
+    spectral bound. When b*d=q and h=c+eps, it equals the family edge U.
+    """
+
+    if not all(np.isfinite(value) and value >= 0 for value in (M, h, b, d)):
+        raise ValueError("block bounds must be finite and nonnegative")
+    return float(0.5 * (M + h + np.hypot(M - h, 2.0 * np.sqrt(b * d))))
+
+
+def interpolated_witness_system(theta: float, c: float = 0.982) -> tuple[np.ndarray, np.ndarray]:
+    """Build a fixed network on the shift-9 to shift-8 interpolation path.
+
+    theta selects a separate autonomous system; it is not a time-varying
+    parameter within a trajectory. All other node/coupling parameters are fixed.
+    """
+
+    if not np.isfinite(theta) or not 0 <= theta <= 1:
+        raise ValueError("theta must lie in [0, 1]")
+    if not np.isfinite(c) or c < 0:
+        raise ValueError("c must be finite and nonnegative")
+    n = 16
+    W = (1.0 - theta) * permutation_shift(n, 9) + theta * permutation_shift(n, 8)
+    A = np.diag(np.linspace(0.35, 0.65, n))
+    B = np.diag(np.linspace(0.024, 0.1, n))
+    D = 0.1 * np.eye(n)
+    C = c * np.eye(n)
+    return assemble(A @ W, B, D, C), W
+
+
+def perturbation_norms(J: np.ndarray, initial: np.ndarray, steps: int) -> np.ndarray:
+    """Iterate e_{k+1}=J e_k and return ||e_k||_2 / ||e_0||_2."""
+
+    if J.ndim != 2 or J.shape[0] != J.shape[1] or initial.shape != (J.shape[0],):
+        raise ValueError("J must be square and initial must match its dimension")
+    if not isinstance(steps, (int, np.integer)) or steps < 0:
+        raise ValueError("steps must be a nonnegative integer")
+    initial_norm = np.linalg.norm(initial)
+    if not np.isfinite(initial_norm) or initial_norm == 0:
+        raise ValueError("initial perturbation must have a finite nonzero norm")
+    state = initial.copy() / initial_norm
+    norms = np.empty(steps + 1)
+    for step in range(steps + 1):
+        norms[step] = np.linalg.norm(state)
+        if step < steps:
+            state = J @ state
+    return norms
+
+
 def nonnormality(matrix: np.ndarray) -> float:
     """Dimensionless Frobenius commutator measure."""
 

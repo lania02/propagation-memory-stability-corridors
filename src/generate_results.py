@@ -1,4 +1,4 @@
-"""Generate all data and publication figures for the APS Open Science paper."""
+"""Generate all data and publication figures for the propagation--memory paper."""
 
 from __future__ import annotations
 
@@ -15,11 +15,14 @@ from validation import (
     fixed_worked_components,
     general_system,
     inf_norm,
+    interpolated_witness_system,
     nonnormality,
+    perturbation_norms,
     permutation_shift,
     spectral_radius,
     theoretical_bounds,
     topology_family,
+    weighted_block_envelope,
     worked_network_system,
 )
 
@@ -237,12 +240,18 @@ def generate_validation_data() -> dict[str, object]:
         rho = spectral_radius(J_scaled)
         if abs(rho - rho_reference) > 1e-9:
             raise AssertionError("state rescaling should preserve the spectrum")
+        optimized = weighted_block_envelope(
+            M, c + eps, inf_norm(B_scaled), inf_norm(D_scaled)
+        )
+        if abs(optimized - bounds.upper) > 1e-12:
+            raise AssertionError("optimized block envelope should equal U")
         scaling_rows.append(
             {
                 "scale": float(scale),
                 "rho": rho,
                 "upper": bounds.upper,
                 "full_inf_norm": inf_norm(J_scaled),
+                "optimized_block_envelope": optimized,
                 "feedback_product": inf_norm(B_scaled) * inf_norm(D_scaled),
             }
         )
@@ -280,6 +289,60 @@ def generate_validation_data() -> dict[str, object]:
         )
     write_csv(DATA_DIR / "coupling_benchmark.csv", coupling_rows)
 
+    interpolation_rows: list[dict[str, object]] = []
+    for theta in np.linspace(0.0, 1.0, 201):
+        J_theta, W_theta = interpolated_witness_system(float(theta))
+        eigenvalues = np.linalg.eigvals(J_theta)
+        diag = cluster_diagnostics(eigenvalues, witness_c, witness_bounds)
+        rho = float(np.max(np.abs(eigenvalues)))
+        if diag["inner_count"] != 16 or diag["annulus_count"] != 0:
+            raise AssertionError("interpolation violates separated cluster count")
+        if not witness_bounds.lower <= rho <= witness_bounds.upper:
+            raise AssertionError("interpolation violates family band")
+        interpolation_rows.append(
+            {
+                "theta": float(theta),
+                "rho": rho,
+                "row_sum_error": float(np.max(np.abs(W_theta.sum(axis=1) - 1.0))),
+                "P_inf_norm": inf_norm(J_theta[:16, :16]),
+                "inner_count": diag["inner_count"],
+                "outer_count": diag["outer_count"],
+                "annulus_count": diag["annulus_count"],
+                "family_lower": witness_bounds.lower,
+                "family_upper": witness_bounds.upper,
+            }
+        )
+    write_csv(DATA_DIR / "topology_interpolation.csv", interpolation_rows)
+
+    # Locate one crossing by a bracketed search; do not assume monotonicity.
+    theta_lo, theta_hi = 0.0, 1.0
+    for _ in range(48):
+        theta_mid = 0.5 * (theta_lo + theta_hi)
+        J_mid, _ = interpolated_witness_system(theta_mid)
+        if spectral_radius(J_mid) < 1.0:
+            theta_lo = theta_mid
+        else:
+            theta_hi = theta_mid
+    theta_crossing = 0.5 * (theta_lo + theta_hi)
+    J_crossing, _ = interpolated_witness_system(theta_crossing)
+    write_csv(DATA_DIR / "topology_crossing.csv", [{
+        "theta": theta_crossing,
+        "rho": spectral_radius(J_crossing),
+        "theta_bracket_lower": theta_lo,
+        "theta_bracket_upper": theta_hi,
+    }])
+
+    trajectory_rows: list[dict[str, object]] = []
+    for theta in (0.0, 1.0):
+        J_theta, _ = interpolated_witness_system(theta)
+        # Same initial perturbation for both fixed networks; no eigenvector selection.
+        norms = perturbation_norms(J_theta, np.ones(32) / np.sqrt(32.0), 4000)
+        for step, relative_norm in enumerate(norms):
+            trajectory_rows.append({
+                "theta": theta, "step": step, "relative_l2_norm": float(relative_norm)
+            })
+    write_csv(DATA_DIR / "topology_trajectories.csv", trajectory_rows)
+
     return {
         "parameters": (M, c, eps, q),
         "bounds": bounds,
@@ -291,6 +354,9 @@ def generate_validation_data() -> dict[str, object]:
         "witness_rows": witness_rows,
         "scaling_rows": scaling_rows,
         "coupling_rows": coupling_rows,
+        "interpolation_rows": interpolation_rows,
+        "theta_crossing": theta_crossing,
+        "trajectory_rows": trajectory_rows,
     }
 
 
@@ -419,13 +485,17 @@ def create_figure_two(results: dict[str, object]) -> None:
     upper = np.array([row["upper"] for row in scaling_rows], dtype=float)
     full_norm = np.array([row["full_inf_norm"] for row in scaling_rows], dtype=float)
     ax.semilogx(scales, full_norm, color=GRAY, linestyle="--", label=r"ordinary $\|J\|_\infty$")
-    ax.semilogx(scales, upper, color=GREEN, label=r"product bound $U$")
+    ax.semilogx(scales, upper, color=GREEN, label=r"family edge $U$")
+    optimized = np.array([row["optimized_block_envelope"] for row in scaling_rows])
+    ax.semilogx(scales, optimized, color=PURPLE, linestyle="none", marker="s",
+                fillstyle="none", markersize=4, markevery=12,
+                label="optimized block norm")
     ax.semilogx(scales, rho, color=BLUE, linewidth=2.0, label=r"actual $\rho(J)$")
     ax.axhline(1.0, color="black", linestyle=":", linewidth=1.0)
     ax.set_yscale("log")
     ax.set_xlabel(r"memory-coordinate scale $s$")
     ax.set_ylabel("bound or spectral radius (log scale)")
-    ax.set_title("(a) Product bound survives state rescaling")
+    ax.set_title("(a) Weighted-norm comparison")
     ax.legend(frameon=False)
 
     ax = axes[1]
@@ -451,11 +521,56 @@ def create_figure_two(results: dict[str, object]) -> None:
     plt.close(fig)
 
 
+def create_figure_three(results: dict[str, object]) -> None:
+    """Show the topology-only crossing and its autonomous perturbation response."""
+
+    rows = results["interpolation_rows"]
+    trajectories = results["trajectory_rows"]
+    crossing = results["theta_crossing"]
+    fig, axes = plt.subplots(1, 2, figsize=(9.4, 3.7))
+    ax = axes[0]
+    theta = np.array([row["theta"] for row in rows])
+    rho = np.array([row["rho"] for row in rows])
+    ax.plot(theta, rho, color=BLUE)
+    ax.axhline(1.0, color=GRAY, linestyle=":", label=r"$\rho=1$")
+    ax.plot([crossing], [1.0], marker="o", color=ORANGE, markersize=5)
+    ax.annotate(rf"$\theta\approx{crossing:.4f}$", xy=(crossing, 1.0),
+                xytext=(0.44, 1.0006), arrowprops={"arrowstyle": "->", "color": GRAY})
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.9947, 1.0014)
+    ax.ticklabel_format(axis="y", useOffset=False)
+    ax.set_xlabel(r"topology parameter $\theta$")
+    ax.set_ylabel(r"spectral radius $\rho(J_\theta)$")
+    ax.set_title("(a) Fixed node and memory parameters")
+    ax.legend(loc="lower right", frameon=False)
+
+    ax = axes[1]
+    for theta_value, color, style, label in (
+        (0.0, BLUE, "-", r"$\theta=0$: shift 9"),
+        (1.0, ORANGE, "--", r"$\theta=1$: shift 8"),
+    ):
+        selected = [row for row in trajectories if row["theta"] == theta_value]
+        ax.semilogy([row["step"] for row in selected],
+                    [row["relative_l2_norm"] for row in selected],
+                    color=color, linestyle=style, label=label)
+    ax.axhline(1.0, color=GRAY, linestyle=":", linewidth=1.0)
+    ax.set_xlim(0, 4000)
+    ax.set_xlabel(r"time step $t$")
+    ax.set_ylabel(r"$\|e_t\|_2/\|e_0\|_2$")
+    ax.set_title("(b) Same initial perturbation")
+    ax.legend(loc="lower left", frameon=False)
+    fig.tight_layout(w_pad=1.6)
+    fig.savefig(FIGURE_DIR / "topology_dynamics.pdf", bbox_inches="tight")
+    fig.savefig(FIGURE_DIR / "topology_dynamics.png", bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> None:
     configure_matplotlib()
     results = generate_validation_data()
     create_figure_one(results)
     create_figure_two(results)
+    create_figure_three(results)
     diagnostics = results["diagnostics"]
     bounds = results["bounds"]
     print(f"seed={SEED}")
@@ -476,6 +591,7 @@ def main() -> None:
         f"shift 8 rho={witness_rows[1]['rho']:.6f}"
     )
     print("wrote data to ./data")
+    print(f"interpolation crossing: theta={results['theta_crossing']:.9f}")
     print("wrote figures to ./figures")
 
 
